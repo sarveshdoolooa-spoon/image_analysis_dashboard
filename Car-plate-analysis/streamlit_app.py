@@ -2,8 +2,9 @@
 Car Plate Viewer — Streamlit edition.
 
 Preserves the original Flask/HTML UI by embedding templates/index.html inside
-st.components.v1.html(). Images and exports are served by a background Flask
-thread (app.py routes) so the HTML payload stays small.
+st.components.v1.html(). Thumbnail images are embedded as compressed data-URIs so
+they work on Streamlit Cloud; a local Flask thread (port 8765) is used when
+available for folder reloads, exports, and full-resolution fallback.
 """
 
 from __future__ import annotations
@@ -11,10 +12,12 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import re
 import socket
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 
 import openpyxl
@@ -23,6 +26,7 @@ import streamlit.components.v1 as components
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from PIL import Image
 
 from app import (
     BASE_PATH,
@@ -37,6 +41,12 @@ APP_DIR = Path(__file__).parent
 INDEX_HTML = APP_DIR / "templates" / "index.html"
 API_HOST = "127.0.0.1"
 API_PORT = 8765
+
+# Public GitHub repo (dev branch) — used for image URLs on Streamlit Cloud.
+# https://github.com/sarveshdoolooa-spoon/image_analysis_dashboard
+DEFAULT_GITHUB_REPO = "sarveshdoolooa-spoon/image_analysis_dashboard"
+DEFAULT_GITHUB_BRANCH = "dev"
+DEFAULT_APP_ROOT = "Car-plate-analysis"
 
 HIDE_STREAMLIT = """
 <style>
@@ -84,7 +94,10 @@ def _run_flask() -> None:
 
 
 @st.cache_resource(show_spinner=False)
-def ensure_api_server() -> str:
+def ensure_api_server() -> str | None:
+    """Start local Flask API if possible; returns None on Streamlit Cloud."""
+    if is_remote_deployment():
+        return None
     if not _api_reachable():
         thread = threading.Thread(target=_run_flask, daemon=True)
         thread.start()
@@ -93,11 +106,83 @@ def ensure_api_server() -> str:
                 break
             time.sleep(0.1)
     if not _api_reachable():
-        raise RuntimeError(f"Image/API server did not start on {API_HOST}:{API_PORT}")
+        return None
     return f"http://{API_HOST}:{API_PORT}"
 
 
-# ── Session defaults ──────────────────────────────────────────────────────────
+def is_remote_deployment() -> bool:
+    """True when running on Streamlit Community Cloud (browser cannot use 127.0.0.1)."""
+    if os.environ.get("CPV_USE_LOCAL_API", "").lower() in ("1", "true", "yes"):
+        return False
+    if os.environ.get("CPV_USE_LOCAL_API", "").lower() in ("0", "false", "no"):
+        return True
+    for var in ("STREAMLIT_RUNTIME_ENV", "STREAMLIT_RUNTIME_ENVIRONMENT", "IS_STREAMLIT_CLOUD"):
+        if str(os.environ.get(var, "")).lower() in ("cloud", "true", "1"):
+            return True
+    if os.environ.get("STREAMLIT_SERVER_ADDRESS", "localhost") not in ("localhost", "127.0.0.1"):
+        return True
+    return False
+
+
+# ── Image URL strategy (Git / local API / embedded thumbnails) ───────────────
+
+
+def _build_github_image_base(
+    repo: str,
+    branch: str,
+    app_root: str,
+    cdn: str = "raw",
+) -> str:
+    root = app_root.strip("/")
+    if cdn == "jsdelivr":
+        return f"https://cdn.jsdelivr.net/gh/{repo}@{branch}/{root}/SoFlo1543"
+    return f"https://raw.githubusercontent.com/{repo}/{branch}/{root}/SoFlo1543"
+
+
+def resolve_image_base_url() -> str | None:
+    """Public Git URL prefix for SoFlo1543 images (no trailing slash)."""
+    try:
+        imgs = st.secrets.get("images", {})
+        if base := imgs.get("base_url"):
+            return str(base).rstrip("/")
+    except Exception:
+        pass
+
+    try:
+        gh = st.secrets.get("github", {})
+        if gh.get("private"):
+            return None
+        repo = gh.get("repo")
+        if repo:
+            return _build_github_image_base(
+                repo,
+                gh.get("branch", DEFAULT_GITHUB_BRANCH),
+                str(gh.get("app_root", DEFAULT_APP_ROOT)),
+                str(gh.get("cdn", "raw")).lower(),
+            )
+    except Exception:
+        pass
+
+    if base := os.environ.get("CPV_IMAGE_BASE_URL"):
+        return base.rstrip("/")
+
+    # Streamlit Cloud: load images from the public dev branch on GitHub.
+    if is_remote_deployment():
+        return _build_github_image_base(
+            DEFAULT_GITHUB_REPO,
+            DEFAULT_GITHUB_BRANCH,
+            DEFAULT_APP_ROOT,
+        )
+
+    return None
+
+
+def _image_source_mode(image_base: str | None, api_base: str | None) -> str:
+    if image_base:
+        return "git"
+    if api_base and not is_remote_deployment():
+        return "api"
+    return "embed"
 
 
 def _init_session_state() -> None:
@@ -150,6 +235,49 @@ def load_folder_records(folder_name: str) -> tuple[list[dict], dict | None, str 
     for r in data["records"]:
         r.setdefault("folder", folder_name)
     return data["records"], data.get("meta"), None
+
+
+@st.cache_data(show_spinner=False)
+def thumbnail_data_uri(folder: str, filename: str, mtime_ns: int) -> str:
+    """Compressed thumbnail as a data-URI (works inside Streamlit Cloud iframes)."""
+    path = BASE_PATH / folder / "image" / filename
+    if not path.is_file():
+        return ""
+    try:
+        with Image.open(path) as img:
+            img = img.convert("RGB") if img.mode not in ("RGB", "RGBA") else img
+            if img.mode == "RGBA":
+                bg = Image.new("RGB", img.size, (15, 17, 23))
+                bg.paste(img, mask=img.split()[3])
+                img = bg
+            try:
+                resample = Image.Resampling.LANCZOS
+            except AttributeError:
+                resample = Image.LANCZOS
+            img.thumbnail((140, 100), resample)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=72, optimize=True)
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{b64}"
+    except Exception:
+        return ""
+
+
+def build_image_map(records: list[dict]) -> dict[str, str]:
+    image_map: dict[str, str] = {}
+    for r in records:
+        folder = r.get("folder", "")
+        for fname in r.get("images") or []:
+            key = f"{folder}/{fname}"
+            if key in image_map:
+                continue
+            path = BASE_PATH / folder / "image" / fname
+            if not path.is_file():
+                continue
+            uri = thumbnail_data_uri(folder, fname, path.stat().st_mtime_ns)
+            if uri:
+                image_map[key] = uri
+    return image_map
 
 
 # ── Excel export (same as app.py api_export_unmatched) ────────────────────────
@@ -283,7 +411,7 @@ def _extract_script_block() -> str:
     return m.group(1) if m else ""
 
 
-def _patch_js(js: str, api_base: str) -> str:
+def _patch_js(js: str, api_base: str | None) -> str:
     """Adapt the original client script for embedded Streamlit data."""
     js = js.replace(
         "let allRecords = [], filtered = [], currentView = 'table', currentFolder = '';",
@@ -339,7 +467,14 @@ def _patch_js(js: str, api_base: str) -> str:
     js = js[:load_start] + """async function loadFolder() {
     const folder = document.getElementById('folderSelect').value;
     if (!folder) return;
+    if (folder === currentFolder) return;
     currentFolder = folder;
+
+    if (USE_STREAMLIT_FOLDER_RELOAD) {
+      navigateStreamlit({ folder });
+      return;
+    }
+
     document.getElementById('main').innerHTML =
       `<div class="state-msg"><div class="spinner"></div><p>Loading records…</p></div>`;
 
@@ -348,36 +483,44 @@ def _patch_js(js: str, api_base: str) -> str:
       : `${API_BASE}/api/records/${encodeURIComponent(folder)}`;
     try {
       const res = await fetch(url);
-      if (!res.ok) {
-        document.getElementById('main').innerHTML =
-          `<div class="state-msg"><div class="icon">⚠️</div><p>Failed to load records.</p></div>`;
-        return;
-      }
+      if (!res.ok) throw new Error('fetch failed');
       allRecords = (await res.json()).records || [];
       journeyFilter = 'all';
       applyFilter();
     } catch (_) {
-      document.getElementById('main').innerHTML =
-        `<div class="state-msg"><div class="icon">⚠️</div><p>Failed to load records.</p></div>`;
+      navigateStreamlit({ folder });
     }
   }
 
 """ + js[load_end:]
 
-    api = api_base.rstrip("/")
+    api = (api_base or "").rstrip("/")
     js = js.replace(
         """function imgUrl(filename, folder) {
     const f = folder || currentFolder;
     return `/images/${encodeURIComponent(f)}/${encodeURIComponent(filename)}`;
   }""",
-        f"""function imgUrl(filename, folder) {{
+        """function encodePathSegments(path) {
+    return path.split('/').map(encodeURIComponent).join('/');
+  }
+
+  function imgUrl(filename, folder) {
     const f = folder || currentFolder;
-    return `{api}/images/${{encodeURIComponent(f)}}/${{encodeURIComponent(filename)}}`;
-  }}""",
+    if (IMAGE_BASE) {
+      return `${IMAGE_BASE}/${encodePathSegments(f + '/image/' + filename)}`;
+    }
+    const key = f + '/' + filename;
+    if (imageMap && imageMap[key]) return imageMap[key];
+    if (API_BASE) {
+      return `${API_BASE}/images/${encodeURIComponent(f)}/${encodeURIComponent(filename)}`;
+    }
+    return '';
+  }""",
     )
 
-    js = js.replace(
-        """function exportUnmatched(type) {
+    if api:
+        js = js.replace(
+            """function exportUnmatched(type) {
     const params = new URLSearchParams({
       folder: currentFolder,
       type,
@@ -385,7 +528,7 @@ def _patch_js(js: str, api_base: str) -> str:
     });
     window.location.href = `/api/export-unmatched?${params}`;
   }""",
-        f"""function exportUnmatched(type) {{
+            f"""function exportUnmatched(type) {{
     const params = new URLSearchParams({{
       folder: currentFolder,
       type,
@@ -393,9 +536,34 @@ def _patch_js(js: str, api_base: str) -> str:
     }});
     window.open(`{api}/api/export-unmatched?${{params}}`, '_blank');
   }}""",
-    )
+        )
+    else:
+        js = js.replace(
+            """function exportUnmatched(type) {
+    const params = new URLSearchParams({
+      folder: currentFolder,
+      type,
+      include_no_images: dashHideNoImages ? '0' : '1',
+    });
+    window.location.href = `/api/export-unmatched?${params}`;
+  }""",
+            """function exportUnmatched(type) {
+    alert('Use the "Export unmatched records (Streamlit)" section below the viewer to download Excel files.');
+  }""",
+        )
 
-    js = js.replace("  init();", "\n  init();")
+    nav_helper = """
+  function navigateStreamlit(params) {
+    const top = window.parent !== window ? window.parent : window;
+    const u = new URL(top.location.href);
+    Object.entries(params).forEach(([k, v]) => {
+      if (v === '' || v === null || v === undefined) u.searchParams.delete(k);
+      else u.searchParams.set(k, String(v));
+    });
+    top.location.href = u.toString();
+  }
+"""
+    js = js.replace("  init();", nav_helper + "\n  init();")
     return js
 
 
@@ -403,14 +571,19 @@ def build_viewer_html(
     records: list[dict],
     folder: str,
     folders: list[dict],
-    api_base: str,
+    image_map: dict[str, str],
+    image_base: str | None,
+    api_base: str | None,
+    use_streamlit_folder_reload: bool,
 ) -> str:
     css = _extract_style_block()
     js = _patch_js(_extract_script_block(), api_base)
 
-    # Inject server data BEFORE the let declarations (no duplicate const names).
     bootstrap = {
-        "API_BASE": api_base.rstrip("/"),
+        "IMAGE_BASE": image_base or "",
+        "API_BASE": api_base.rstrip("/") if api_base else "",
+        "USE_STREAMLIT_FOLDER_RELOAD": use_streamlit_folder_reload,
+        "imageMap": image_map,
         "STREAMLIT_RECORDS": records,
         "foldersList": folders,
         "STREAMLIT_VIEW": st.session_state.view,
@@ -484,9 +657,12 @@ def main() -> None:
 
     try:
         api_base = ensure_api_server()
-    except RuntimeError as exc:
-        st.error(str(exc))
-        st.stop()
+    except Exception:
+        api_base = None
+
+    remote = is_remote_deployment() or api_base is None
+    image_base = resolve_image_base_url()
+    img_mode = _image_source_mode(image_base, api_base)
 
     folders_api = list_folders_api()
     _sync_state_from_query(folders_raw)
@@ -503,11 +679,27 @@ def main() -> None:
         st.error(err)
         st.stop()
 
+    image_map: dict[str, str] = {}
+    if img_mode == "embed":
+        with st.spinner("Preparing thumbnails from cloned Git files…"):
+            image_map = build_image_map(records)
+        if remote and not image_map and BASE_PATH.exists():
+            st.warning(
+                "No thumbnails could be built from the cloned repo. "
+                "Add GitHub image settings in Streamlit secrets — see "
+                "`.streamlit/secrets.toml.example` — or verify `SoFlo1543/` is committed."
+            )
+    elif img_mode == "git" and remote:
+        st.caption(f"Images loaded from Git: `{image_base}`")
+
     html = build_viewer_html(
         records=records,
         folder=folder,
         folders=folders_api,
+        image_map=image_map,
+        image_base=image_base,
         api_base=api_base,
+        use_streamlit_folder_reload=remote,
     )
 
     components.html(html, height=900, scrolling=True)
