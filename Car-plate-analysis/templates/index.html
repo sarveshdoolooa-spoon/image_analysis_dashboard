@@ -1,0 +1,1467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Car Plate Viewer &mdash; SoFlo1543</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117; --surface: #1a1d27; --surface2: #22263a; --border: #2e3350;
+      --accent: #4f8ef7; --green: #22c55e; --red: #ef4444; --yellow: #f59e0b;
+      --text: #e2e8f0; --muted: #8892a4; --radius: 10px;
+      --shadow: 0 4px 24px rgba(0,0,0,.45);
+    }
+
+    html, body { height: 100%; overflow: hidden; font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    body { display: flex; flex-direction: column; }
+
+    /* ── Header ──────────────────────────────────────────────────────── */
+    header {
+      flex-shrink: 0; height: 54px;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 0 20px; display: flex; align-items: center; z-index: 10;
+    }
+    .logo { font-size: 1rem; font-weight: 700; color: var(--accent); }
+    .logo span { color: var(--muted); font-weight: 400; font-size: .8rem; margin-left: 6px; }
+
+    /* ── Toolbar ──────────────────────────────────────────────────────── */
+    .toolbar {
+      flex-shrink: 0;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 0 20px; display: flex; align-items: center; gap: 10px;
+      flex-wrap: nowrap; height: 54px; z-index: 9;
+    }
+    .toolbar label { font-size: .76rem; color: var(--muted); white-space: nowrap; }
+    select, input[type="text"] {
+      background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+      border-radius: 7px; padding: 5px 10px; font-size: .83rem; outline: none;
+      height: 32px; transition: border-color .2s;
+    }
+    select:focus, input[type="text"]:focus { border-color: var(--accent); }
+    select { cursor: pointer; min-width: 200px; }
+    input[type="text"] { min-width: 175px; }
+    .badge {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 20px; padding: 3px 10px; font-size: .74rem; color: var(--muted); white-space: nowrap;
+    }
+    .badge strong { color: var(--text); }
+
+    .view-toggle { display: flex; gap: 3px; margin-left: auto; }
+    .view-toggle button {
+      background: var(--surface2); border: 1px solid var(--border); color: var(--muted);
+      border-radius: 6px; padding: 5px 11px; cursor: pointer; font-size: .76rem;
+      height: 32px; transition: all .15s; white-space: nowrap;
+    }
+    .view-toggle button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+    /* ── Main scroll container ────────────────────────────────────────── */
+    main { flex: 1; min-height: 0; overflow-x: auto; overflow-y: auto; padding: 16px 20px; }
+
+    /* ── Tooltips ─────────────────────────────────────────────────────── */
+    .tip { position: relative; display: inline-flex; align-items: center; }
+    .tip-icon {
+      width: 15px; height: 15px; border-radius: 50%; background: var(--surface2);
+      border: 1px solid var(--border); color: var(--muted); font-size: .65rem;
+      font-weight: 700; cursor: help; display: inline-flex; align-items: center;
+      justify-content: center; margin-left: 5px; flex-shrink: 0; line-height: 1;
+    }
+    .tip:hover .tip-box {
+      opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0);
+    }
+    .tip-box {
+      opacity: 0; pointer-events: none;
+      position: absolute; bottom: calc(100% + 7px); left: 50%;
+      transform: translateX(-50%) translateY(4px);
+      background: #111827; border: 1px solid var(--border); border-radius: 8px;
+      padding: 9px 12px; font-size: .73rem; line-height: 1.55; color: var(--text);
+      width: 230px; z-index: 200; transition: opacity .15s, transform .15s;
+      text-align: left; box-shadow: 0 4px 20px rgba(0,0,0,.6);
+    }
+    .tip-box::after {
+      content: ''; position: absolute; top: 100%; left: 50%;
+      transform: translateX(-50%); border: 6px solid transparent;
+      border-top-color: var(--border);
+    }
+
+    /* ── Unmatched reason tags ────────────────────────────────────────── */
+    .reason-tag {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: .71rem; border-radius: 5px; padding: 4px 9px;
+      border: 1px solid; margin-top: 2px; line-height: 1.4;
+    }
+    .reason-tag.cutoff  { color: #60a5fa; border-color: rgba(96,165,250,.3); background: rgba(96,165,250,.08); }
+    .reason-tag.before  { color: #a78bfa; border-color: rgba(167,139,250,.3); background: rgba(167,139,250,.08); }
+    .reason-tag.mismatch { color: var(--yellow); border-color: rgba(245,158,11,.3); background: rgba(245,158,11,.08); }
+
+    /* ── State messages ───────────────────────────────────────────────── */
+    .state-msg {
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; min-height: 280px; gap: 10px; color: var(--muted);
+    }
+    .state-msg .icon { font-size: 2.6rem; opacity: .4; }
+    .spinner { width: 32px; height: 32px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Table ────────────────────────────────────────────────────────── */
+    table { width: 100%; border-collapse: collapse; font-size: .81rem; min-width: 880px; }
+    thead th {
+      position: sticky; top: 0;
+      background: var(--surface2); z-index: 5;
+      text-align: left; padding: 10px 11px; font-weight: 600; color: var(--muted);
+      white-space: nowrap; user-select: none;
+      box-shadow: 0 2px 0 var(--border), 0 -20px 0 20px var(--surface2);
+    }
+    thead th:hover { color: var(--text); }
+    tbody tr { border-bottom: 1px solid var(--border); transition: background .1s; }
+    tbody tr:hover { background: var(--surface2); }
+    td { padding: 8px 11px; vertical-align: middle; }
+
+    .plate-cell {
+      font-family: 'Courier New', monospace; font-size: .88rem; font-weight: 700;
+      background: var(--surface2); border-radius: 4px; padding: 2px 7px; display: inline-block;
+    }
+    .badge-enter { color: var(--green); }
+    .badge-exit  { color: var(--red); }
+    .badge-pass { background: rgba(34,197,94,.12); color: var(--green); border: 1px solid rgba(34,197,94,.25); border-radius: 4px; padding: 1px 7px; font-size: .78rem; }
+    .badge-fail { background: rgba(239,68,68,.12); color: var(--red); border: 1px solid rgba(239,68,68,.25); border-radius: 4px; padding: 1px 7px; font-size: .78rem; }
+
+    .thumb-list { display: flex; gap: 4px; flex-wrap: wrap; }
+    .thumb-list img { width: 66px; height: 48px; object-fit: cover; border-radius: 4px; border: 2px solid var(--border); cursor: pointer; display: block; transition: border-color .15s, filter .15s; }
+    .thumb-list img:hover { border-color: var(--accent); filter: brightness(1.12); }
+    .no-img { color: var(--muted); font-size: .72rem; font-style: italic; }
+
+    /* ── Grid ─────────────────────────────────────────────────────────── */
+    .grid-wrap { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; transition: box-shadow .2s; }
+    .card:hover { box-shadow: var(--shadow); }
+    .card-imgs { display: flex; gap: 2px; background: #000; min-height: 100px; overflow: hidden; }
+    .card-imgs img { flex: 1; object-fit: cover; max-height: 145px; cursor: pointer; transition: filter .15s; }
+    .card-imgs img:hover { filter: brightness(1.1); }
+    .card-imgs .no-img-card { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: .72rem; background: var(--surface2); min-height: 100px; }
+    .card-body { padding: 10px 12px; }
+    .card-plate { font-family: 'Courier New', monospace; font-size: .92rem; font-weight: 700; margin-bottom: 5px; }
+    .card-meta { font-size: .73rem; color: var(--muted); line-height: 1.75; }
+    .card-meta strong { color: var(--text); }
+    .card-tags { margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
+    .tag { font-size: .67rem; border-radius: 4px; padding: 2px 6px; border: 1px solid var(--border); color: var(--muted); }
+
+    /* ── Journey View ─────────────────────────────────────────────────── */
+    .journey-wrap { display: flex; flex-direction: column; gap: 12px; }
+    .journey-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden;
+    }
+    .journey-header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 14px; background: var(--surface2); border-bottom: 1px solid var(--border);
+    }
+    .journey-plate { font-family: 'Courier New', monospace; font-size: 1rem; font-weight: 700; }
+    .journey-duration { margin-left: auto; font-size: .78rem; color: var(--muted); }
+    .journey-duration strong { color: var(--yellow); }
+    .journey-body { display: grid; grid-template-columns: 1fr 1fr; }
+    .journey-side {
+      padding: 10px 14px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .journey-side + .journey-side { border-left: 1px solid var(--border); }
+    .journey-side-title {
+      font-size: .72rem; font-weight: 700; letter-spacing: .5px;
+      text-transform: uppercase; display: flex; align-items: center; gap: 6px;
+    }
+    .journey-side-title.entry { color: var(--green); }
+    .journey-side-title.exit  { color: var(--red); }
+    .journey-time { font-size: .78rem; color: var(--muted); }
+    .journey-time strong { color: var(--text); }
+    .journey-photos { display: flex; gap: 5px; flex-wrap: wrap; }
+    .journey-photos img { width: 80px; height: 58px; object-fit: cover; border-radius: 5px; border: 2px solid var(--border); cursor: pointer; transition: border-color .15s, filter .15s; }
+    .journey-photos img:hover { border-color: var(--accent); filter: brightness(1.12); }
+    .journey-empty { color: var(--muted); font-size: .75rem; font-style: italic; padding: 6px 0; }
+    .journey-gate { font-size: .73rem; color: var(--muted); }
+
+    /* unmatched single-side */
+    .journey-card.unmatched { border-color: var(--border); opacity: .75; }
+    .journey-card.unmatched .journey-body { grid-template-columns: 1fr; }
+
+    /* ── Lightbox ─────────────────────────────────────────────────────── */
+    #lightbox {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,.93); z-index: 1000;
+      flex-direction: column; align-items: center; justify-content: center;
+    }
+    #lightbox.open { display: flex; }
+
+    #lb-topbar {
+      width: 100%; display: flex; align-items: center;
+      justify-content: space-between; padding: 9px 16px; flex-shrink: 0;
+    }
+    #lb-plate { color: #fff; font-family: 'Courier New', monospace; font-weight: 700; }
+    #lb-counter { color: rgba(255,255,255,.5); font-size: .8rem; }
+    #lb-close-btn { background: none; border: none; color: rgba(255,255,255,.6); font-size: 1.4rem; cursor: pointer; padding: 4px 8px; }
+    #lb-close-btn:hover { color: #fff; }
+
+    #lb-viewport {
+      flex: 1; min-height: 0; width: 100%; overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+      position: relative; cursor: zoom-in;
+    }
+    #lb-viewport.zoomed   { cursor: grab; }
+    #lb-viewport.dragging { cursor: grabbing; }
+
+    #lbImg {
+      display: block; max-width: 100%; max-height: 100%; object-fit: contain;
+      border-radius: 6px; box-shadow: 0 8px 48px rgba(0,0,0,.8);
+      transform-origin: 50% 50%; user-select: none;
+      -webkit-user-drag: none; pointer-events: none; will-change: transform;
+    }
+
+    #lb-bottombar {
+      width: 100%; display: flex; align-items: center;
+      justify-content: center; gap: 8px; padding: 9px 16px; flex-shrink: 0;
+    }
+    .lb-btn {
+      background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.15);
+      color: #fff; border-radius: 7px; padding: 6px 14px; cursor: pointer;
+      font-size: .8rem; transition: background .15s; white-space: nowrap; height: 32px;
+    }
+    .lb-btn:hover { background: rgba(255,255,255,.18); }
+    #lb-zoom-level { color: rgba(255,255,255,.55); font-size: .78rem; min-width: 42px; text-align: center; }
+    .lb-sep { color: rgba(255,255,255,.2); }
+    #lb-hint { color: rgba(255,255,255,.3); font-size: .7rem; }
+
+    /* ── Dashboard ─────────────────────────────────────────────────────── */
+    .dash-wrap { display: flex; flex-direction: column; gap: 18px; max-width: 1400px; }
+
+    .kpi-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+    .kpi-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 16px 18px; display: flex; flex-direction: column; gap: 4px;
+    }
+    .kpi-card .kpi-val { font-size: 1.9rem; font-weight: 700; line-height: 1; }
+    .kpi-card .kpi-sub { font-size: .72rem; color: var(--muted); }
+    .kpi-card .kpi-label { font-size: .78rem; color: var(--muted); margin-top: 2px; }
+    .kpi-card.green .kpi-val { color: var(--green); }
+    .kpi-card.red   .kpi-val { color: var(--red); }
+    .kpi-card.blue  .kpi-val { color: var(--accent); }
+    .kpi-card.yellow .kpi-val { color: var(--yellow); }
+
+    .dash-section-title {
+      font-size: .7rem; font-weight: 700; letter-spacing: .8px;
+      text-transform: uppercase; color: var(--muted); margin-bottom: -6px;
+    }
+
+    .chart-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px,1fr)); gap: 12px; }
+    .chart-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 16px 18px;
+    }
+    .chart-card.wide { grid-column: 1 / -1; }
+    .chart-card h4 { font-size: .82rem; font-weight: 600; color: var(--muted); margin-bottom: 14px; }
+
+    .dash-table { width: 100%; border-collapse: collapse; font-size: .78rem; }
+    .dash-table th { text-align: left; padding: 6px 8px; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    .dash-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+    .dash-table tr:last-child td { border-bottom: none; }
+    .dash-table .mono { font-family: 'Courier New', monospace; font-weight: 700; }
+
+    .dur-bar-wrap { display: flex; flex-direction: column; gap: 6px; }
+    .dur-bar-row { display: flex; align-items: center; gap: 8px; font-size: .75rem; }
+    .dur-bar-label { width: 80px; color: var(--muted); flex-shrink: 0; }
+    .dur-bar-track { flex: 1; background: var(--surface2); border-radius: 4px; height: 12px; overflow: hidden; }
+    .dur-bar-fill  { height: 100%; border-radius: 4px; background: var(--accent); transition: width .4s; }
+    .dur-bar-count { width: 36px; text-align: right; color: var(--text); flex-shrink: 0; }
+
+    /* ── Possible Matches View ────────────────────────────────────────── */
+    .pm-wrap { display: flex; flex-direction: column; gap: 14px; max-width: 1300px; }
+
+    .pm-header-bar {
+      display: flex; align-items: center; gap: 10px;
+      background: rgba(124,93,240,.1); border: 1px solid rgba(124,93,240,.35);
+      border-radius: 8px; padding: 9px 14px; font-size: .8rem;
+    }
+    .pm-header-bar strong { color: #a78bfa; }
+    .pm-header-bar .pm-thresh {
+      margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: .76rem; color: var(--muted);
+    }
+    .pm-header-bar input[type=range] { width: 90px; accent-color: var(--accent); }
+
+    .pm-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden;
+    }
+    .pm-card-header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 14px; background: var(--surface2); border-bottom: 1px solid var(--border);
+    }
+    .pm-conf-label { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
+    .pm-conf-bar-wrap { flex: 1; background: var(--bg); border-radius: 4px; height: 8px; overflow: hidden; }
+    .pm-conf-bar { height: 100%; border-radius: 4px; transition: width .3s; }
+    .pm-conf-pct { font-size: .8rem; font-weight: 700; min-width: 38px; text-align: right; }
+
+    .pm-body { display: grid; grid-template-columns: 1fr 1fr; }
+    .pm-side { padding: 12px 14px; display: flex; flex-direction: column; gap: 7px; }
+    .pm-side + .pm-side { border-left: 1px solid var(--border); }
+    .pm-side-title { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
+    .pm-side-title.entry { color: var(--green); }
+    .pm-side-title.exit  { color: var(--red); }
+
+    .pm-plates { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .pm-plate { font-family: 'Courier New', monospace; font-size: 1rem; font-weight: 700; }
+    .pm-plate .diff { color: var(--yellow); text-decoration: underline; }
+    .pm-time  { font-size: .77rem; color: var(--muted); }
+    .pm-time strong { color: var(--text); }
+    .pm-attrs { display: flex; gap: 6px; flex-wrap: wrap; }
+    .pm-attr { font-size: .7rem; border-radius: 4px; padding: 2px 6px; border: 1px solid var(--border); color: var(--muted); }
+    .pm-attr.match { border-color: rgba(34,197,94,.4); color: var(--green); background: rgba(34,197,94,.08); }
+    .pm-photos { display: flex; gap: 4px; flex-wrap: wrap; }
+    .pm-photos img { width: 74px; height: 54px; object-fit: cover; border-radius: 4px; border: 2px solid var(--border); cursor: pointer; transition: border-color .15s; }
+    .pm-photos img:hover { border-color: var(--accent); }
+
+    /* Confidence colours */
+    .conf-high   .pm-conf-bar { background: var(--green); }
+    .conf-high   .pm-conf-pct { color: var(--green); }
+    .conf-high   .pm-conf-label { color: var(--green); }
+    .conf-med    .pm-conf-bar { background: var(--yellow); }
+    .conf-med    .pm-conf-pct { color: var(--yellow); }
+    .conf-med    .pm-conf-label { color: var(--yellow); }
+    .conf-low    .pm-conf-bar { background: #f97316; }
+    .conf-low    .pm-conf-pct { color: #f97316; }
+    .conf-low    .pm-conf-label { color: #f97316; }
+
+    /* Clickable KPI cards */
+    .kpi-card.clickable { cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+    .kpi-card.clickable:hover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(79,142,247,.2); }
+    .kpi-card.clickable .kpi-hint { font-size: .67rem; color: var(--accent); margin-top: 4px; opacity: .8; }
+
+    /* Journey filter banner */
+    .journey-filter-bar {
+      display: flex; align-items: center; gap: 10px;
+      background: rgba(79,142,247,.1); border: 1px solid rgba(79,142,247,.3);
+      border-radius: 8px; padding: 8px 14px; margin-bottom: 12px; font-size: .8rem;
+    }
+    .journey-filter-bar strong { color: var(--accent); }
+    .journey-filter-bar button {
+      background: none; border: 1px solid var(--border);
+      color: var(--muted); border-radius: 6px; padding: 3px 10px;
+      cursor: pointer; font-size: .75rem; transition: all .15s;
+    }
+    .journey-filter-bar button:hover { border-color: var(--accent); color: var(--text); }
+    .journey-filter-bar .jf-spacer { margin-left: auto; }
+    .journey-filter-bar .export-btn {
+      border-color: rgba(79,142,247,.5); color: var(--accent); background: rgba(79,142,247,.08);
+    }
+    .journey-filter-bar .export-btn:hover { background: rgba(79,142,247,.18); }
+
+    /* ── Dashboard filter bar ──────────────────────────────────────────────── */
+    .dash-filter-bar {
+      display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+      background: rgba(245,158,11,.07); border: 1px solid rgba(245,158,11,.22);
+      border-radius: 8px; padding: 9px 16px;
+    }
+    .dash-filter-bar label {
+      display: flex; align-items: center; gap: 8px; cursor: pointer;
+      color: var(--text); font-size: .8rem; font-weight: 500;
+    }
+    .dash-filter-bar input[type=checkbox] { accent-color: var(--yellow); width: 15px; height: 15px; cursor: pointer; }
+    .dash-filter-bar .filter-note { font-size: .72rem; color: var(--muted); }
+    .dash-filter-bar .filter-note em { color: var(--yellow); font-style: normal; }
+
+    /* ── Dashboard export bar ──────────────────────────────────────────────── */
+    .dash-export-bar {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px;
+    }
+    .dash-export-bar .export-label { font-size: .74rem; color: var(--muted); white-space: nowrap; }
+    .dash-export-btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      border-radius: 6px; padding: 5px 13px; cursor: pointer;
+      font-size: .76rem; font-family: inherit; transition: all .15s; white-space: nowrap;
+      background: var(--surface2); border: 1px solid var(--border); color: var(--muted);
+    }
+    .dash-export-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .dash-export-btn.entry { border-color: rgba(245,158,11,.45); color: var(--yellow); background: rgba(245,158,11,.07); }
+    .dash-export-btn.entry:hover { background: rgba(245,158,11,.15); }
+    .dash-export-btn.exit  { border-color: rgba(239,68,68,.45);  color: var(--red);    background: rgba(239,68,68,.07); }
+    .dash-export-btn.exit:hover  { background: rgba(239,68,68,.15); }
+    .dash-export-btn.both  { border-color: rgba(79,142,247,.45);  color: var(--accent); background: rgba(79,142,247,.07); }
+    .dash-export-btn.both:hover  { background: rgba(79,142,247,.15); }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">&#127758; Car Plate Viewer <span>SoFlo1543</span></div>
+</header>
+
+<div class="toolbar">
+  <label>Folder:</label>
+  <select id="folderSelect" onchange="loadFolder()">
+    <option value="">— select —</option>
+  </select>
+
+  <label>Search:</label>
+  <input type="text" id="searchInput" placeholder="Plate, gate, region…" oninput="applyFilter()" />
+
+  <label>Type:</label>
+  <select id="filterType" onchange="applyFilter()">
+    <option value="">All</option>
+    <option value="Entering">Entering</option>
+    <option value="Exit">Exit</option>
+  </select>
+
+  <span class="badge" id="countBadge"><strong>—</strong> records</span>
+
+  <div class="view-toggle">
+    <button id="btnTable"     class="active" onclick="setView('table')">&#9776; Table</button>
+    <button id="btnGrid"      onclick="setView('grid')">&#9632; Grid</button>
+    <button id="btnJourney"   onclick="setView('journey')">&#8644; Journeys</button>
+    <button id="btnDashboard"      onclick="setView('dashboard')">&#9685; Dashboard</button>
+    <button id="btnPossiblematches" onclick="setView('possiblematches')">&#128279; Possible Matches</button>
+  </div>
+</div>
+
+<main id="main">
+  <div class="state-msg">
+    <div class="icon">&#128247;</div>
+    <p>Select a retrieval folder to load records.</p>
+  </div>
+</main>
+
+<!-- Lightbox -->
+<div id="lightbox">
+  <div id="lb-topbar">
+    <span id="lb-plate"></span>
+    <span id="lb-counter"></span>
+    <button id="lb-close-btn" onclick="closeLightbox()">&#x2715;</button>
+  </div>
+  <div id="lb-viewport"><img id="lbImg" src="" alt="" draggable="false" /></div>
+  <div id="lb-bottombar">
+    <button class="lb-btn" onclick="lbNav(-1)">&#8592; Prev</button>
+    <span class="lb-sep">|</span>
+    <button class="lb-btn" onclick="lbZoom(-1)">&#8722;</button>
+    <span id="lb-zoom-level">100%</span>
+    <button class="lb-btn" onclick="lbZoom(1)">+</button>
+    <button class="lb-btn" onclick="lbZoomReset()">1:1</button>
+    <span class="lb-sep">|</span>
+    <button class="lb-btn" onclick="lbNav(1)">Next &#8594;</button>
+    <span class="lb-sep">|</span>
+    <span id="lb-hint">Scroll to zoom &bull; Drag to pan &bull; Click image to toggle zoom</span>
+  </div>
+</div>
+
+<script>
+  /* ── State ───────────────────────────────────────────────────────────── */
+  let allRecords = [], filtered = [], currentView = 'table', currentFolder = '';
+  let lbImages = [], lbIdx = 0, rowRegistry = [];
+  let journeyFilter = 'all'; // 'all' | 'entry-only' | 'exit-only'
+  let dashHideNoImages = false; // when true, exclude no-image records from dashboard stats & exports
+  let zoom = 1, panX = 0, panY = 0, dragStart = null, dragMoved = false;
+  const ZOOM_STEP = 1.35, ZOOM_MIN = 1, ZOOM_MAX = 8;
+
+  /* ── Init ────────────────────────────────────────────────────────────── */
+  async function init() {
+    const folders = await fetch('/api/folders').then(r => r.json());
+    const sel = document.getElementById('folderSelect');
+
+    // Special "All Folders" option
+    const allOpt = document.createElement('option');
+    allOpt.value = '__ALL__';
+    allOpt.textContent = '★ All Folders Combined';
+    sel.appendChild(allOpt);
+
+    folders.forEach(f => {
+      const o = document.createElement('option');
+      o.value = f.name;
+      o.textContent = f.label + '  (' + f.name.replace('Entrance and Exit Retrieval_','') + ')';
+      sel.appendChild(o);
+    });
+
+    if (folders.length) { sel.value = folders[0].name; loadFolder(); }
+  }
+
+  async function loadFolder() {
+    const folder = document.getElementById('folderSelect').value;
+    if (!folder) return;
+    currentFolder = folder;
+    document.getElementById('main').innerHTML =
+      `<div class="state-msg"><div class="spinner"></div><p>Loading records…</p></div>`;
+
+    const url = folder === '__ALL__' ? '/api/all-records'
+                                     : '/api/records/' + encodeURIComponent(folder);
+    const res = await fetch(url);
+    if (!res.ok) {
+      document.getElementById('main').innerHTML =
+        `<div class="state-msg"><div class="icon">⚠️</div><p>Failed to load records.</p></div>`;
+      return;
+    }
+    allRecords = (await res.json()).records || [];
+    journeyFilter = 'all';
+    applyFilter();
+  }
+
+  /* ── Filter ──────────────────────────────────────────────────────────── */
+  function applyFilter() {
+    const q = document.getElementById('searchInput').value.toLowerCase().trim();
+    const t = document.getElementById('filterType').value;
+
+    // Journey + dashboard views need both entry and exit — ignore type filter
+    const skipType = currentView === 'journey' || currentView === 'dashboard';
+
+    filtered = allRecords.filter(r => {
+      if (!skipType && t && r.enter_exit !== t) return false;
+      if (q) {
+        const hay = [r.plate, r.gate, r.region, r.parking_lot,
+                     r.enter_time, r.depart_time, r.result].join(' ').toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+
+    const label = currentView === 'journey' ? 'plates' : 'records';
+    const displayCount = currentView === 'journey' ? countUniquePlates(filtered) : filtered.length;
+    document.getElementById('countBadge').innerHTML =
+      `<strong>${displayCount}</strong>&nbsp;/&nbsp;${allRecords.length} ${label}`;
+
+    if      (currentView === 'table')          renderTable();
+    else if (currentView === 'grid')           renderGrid();
+    else if (currentView === 'journey')        renderJourneys();
+    else if (currentView === 'dashboard')      renderDashboard();
+    else if (currentView === 'possiblematches') renderPossibleMatches();
+  }
+
+  function countUniquePlates(recs) {
+    return new Set(recs.map(r => r.plate)).size;
+  }
+
+  function setView(v) {
+    if (v !== 'dashboard') destroyCharts();
+    currentView = v;
+    ['table','grid','journey','dashboard','possiblematches'].forEach(id => {
+      document.getElementById('btn' + id.charAt(0).toUpperCase() + id.slice(1))
+              .classList.toggle('active', id === v);
+    });
+    const noFilter = v === 'journey' || v === 'dashboard' || v === 'possiblematches';
+    document.getElementById('filterType').disabled = noFilter;
+    applyFilter();
+  }
+
+  /* ── Helpers ─────────────────────────────────────────────────────────── */
+  function imgUrl(filename, folder) {
+    const f = folder || currentFolder;
+    return `/images/${encodeURIComponent(f)}/${encodeURIComponent(filename)}`;
+  }
+
+  function escHtml(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function entryBadge(r) {
+    const cls = r.enter_exit === 'Entering' ? 'badge-enter' : 'badge-exit';
+    return `<span class="${cls}">${r.enter_exit==='Entering'?'↓':'↑'} ${r.enter_exit||'—'}</span>`;
+  }
+  function resultBadge(r) {
+    return `<span class="${r.result==='Pass'?'badge-pass':'badge-fail'}">${escHtml(r.result)||'—'}</span>`;
+  }
+
+  function thumbsHtml(r, idx) {
+    rowRegistry[idx] = { images: r.images, plate: r.plate, folder: r.folder||currentFolder };
+    if (!r.images || !r.images.length) return `<span class="no-img">No images</span>`;
+    return r.images.map((img, i) =>
+      `<img src="${imgUrl(img, r.folder)}" alt="${escHtml(img)}" title="${escHtml(img)}"
+            loading="lazy" class="lb-trigger" data-row="${idx}" data-idx="${i}">`
+    ).join('');
+  }
+
+  /**
+   * Trigger a download of an Excel file containing unmatched records + embedded images.
+   * @param {'entry-only'|'exit-only'|'both'} type
+   */
+  function exportUnmatched(type) {
+    const params = new URLSearchParams({
+      folder: currentFolder,
+      type,
+      include_no_images: dashHideNoImages ? '0' : '1',
+    });
+    window.location.href = `/api/export-unmatched?${params}`;
+  }
+
+  /* ── Table ────────────────────────────────────────────────────────────── */
+  function renderTable() {
+    if (!filtered.length) { showEmpty(); return; }
+    rowRegistry = [];
+    const rows = filtered.map((r, i) => `
+      <tr>
+        <td><span class="plate-cell">${escHtml(r.plate)}</span></td>
+        <td>${entryBadge(r)}</td>
+        <td>${escHtml(r.enter_time)||'—'}</td>
+        <td>${escHtml(r.depart_time)||'—'}</td>
+        <td>${escHtml(r.duration)||'—'}</td>
+        <td>${resultBadge(r)}</td>
+        <td>${escHtml(r.gate)||'—'}</td>
+        <td>${escHtml(r.region)||'—'}</td>
+        <td><div class="thumb-list">${thumbsHtml(r,i)}</div></td>
+      </tr>`).join('');
+    document.getElementById('main').innerHTML = `
+      <table>
+        <thead><tr>
+          <th>Plate</th><th>Type</th><th>Enter Time</th><th>Depart Time</th>
+          <th>Duration</th><th>Result</th><th>Gate</th><th>Region</th><th>Photos</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  /* ── Grid ─────────────────────────────────────────────────────────────── */
+  function renderGrid() {
+    if (!filtered.length) { showEmpty(); return; }
+    rowRegistry = [];
+    const cards = filtered.map((r, idx) => {
+      rowRegistry[idx] = { images: r.images, plate: r.plate, folder: r.folder||currentFolder };
+      const imgs = r.images && r.images.length
+        ? r.images.slice(0,4).map((img,i) =>
+            `<img src="${imgUrl(img,r.folder)}" alt="${escHtml(img)}" loading="lazy"
+                  class="lb-trigger" data-row="${idx}" data-idx="${i}">`).join('')
+        : `<div class="no-img-card">No images</div>`;
+      return `
+        <div class="card">
+          <div class="card-imgs">${imgs}</div>
+          <div class="card-body">
+            <div class="card-plate">${escHtml(r.plate)||'—'}</div>
+            <div class="card-meta">
+              ${entryBadge(r)}&nbsp;&nbsp;${resultBadge(r)}<br>
+              <strong>Enter:</strong> ${escHtml(r.enter_time)||'—'}<br>
+              <strong>Depart:</strong> ${escHtml(r.depart_time)||'—'}<br>
+              <strong>Duration:</strong> ${escHtml(r.duration)||'—'}<br>
+              <strong>Gate:</strong> ${escHtml(r.gate)||'—'}
+            </div>
+            <div class="card-tags">
+              ${r.region?`<span class="tag">${escHtml(r.region)}</span>`:''}
+              ${r.vehicle_type?`<span class="tag">${escHtml(r.vehicle_type)}</span>`:''}
+              ${r.color?`<span class="tag">${escHtml(r.color)}</span>`:''}
+              ${r.brand?`<span class="tag">${escHtml(r.brand)}</span>`:''}
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+    document.getElementById('main').innerHTML = `<div class="grid-wrap">${cards}</div>`;
+  }
+
+  /* ── Journey View ─────────────────────────────────────────────────────── */
+  function buildJourneys(records) {
+    const byPlate = {};
+    records.forEach(r => {
+      const p = r.plate;
+      if (!byPlate[p]) byPlate[p] = { entries: [], exits: [] };
+      if (r.enter_exit === 'Entering') byPlate[p].entries.push(r);
+      else                              byPlate[p].exits.push(r);
+    });
+
+    const journeys = [];
+    Object.entries(byPlate).forEach(([plate, {entries, exits}]) => {
+      entries.sort((a, b) => (a.enter_time||'') < (b.enter_time||'') ? -1 : 1);
+      exits.sort((a, b)   => (a.enter_time||'') < (b.enter_time||'') ? -1 : 1);
+
+      const usedExits = new Set();
+      entries.forEach(entry => {
+        // The parking system stores the original entry time on the exit record too.
+        // So the definitive match is: exit.enter_time === entry.enter_time (same event).
+        let matchIdx = exits.findIndex((ex, i) =>
+          !usedExits.has(i) && ex.enter_time === entry.enter_time
+        );
+
+        // Fallback: nearest exit whose enter_time is >= this entry's enter_time
+        if (matchIdx === -1) {
+          exits.forEach((ex, i) => {
+            if (!usedExits.has(i) && matchIdx === -1 &&
+                (ex.enter_time||'') >= (entry.enter_time||'')) {
+              matchIdx = i;
+            }
+          });
+        }
+
+        if (matchIdx !== -1) {
+          usedExits.add(matchIdx);
+          journeys.push({ plate, entry, exit: exits[matchIdx] });
+        } else {
+          journeys.push({ plate, entry, exit: null });
+        }
+      });
+      exits.forEach((ex, i) => {
+        if (!usedExits.has(i)) journeys.push({ plate, entry: null, exit: ex });
+      });
+    });
+
+    // Sort by entry time (or exit enter_time for unmatched exits)
+    journeys.sort((a, b) => {
+      const ta = (a.entry || a.exit || {}).enter_time || '';
+      const tb = (b.entry || b.exit || {}).enter_time || '';
+      return ta < tb ? -1 : 1;
+    });
+    return journeys;
+  }
+
+  function clearJourneyFilter() {
+    journeyFilter = 'all';
+    renderJourneys();
+  }
+
+  // Compute reason why a record is unmatched
+  function unmatchedReason(rec, type, dataStart, dataEnd) {
+    const t = parseTime(rec.enter_time);
+    const end = parseTime(dataEnd);
+    const start = parseTime(dataStart);
+
+    if (type === 'entry') {
+      // Near the end of the export window → vehicle may still have been parked
+      if (t && end && (end - t) / 60000 < 90) {
+        return { cls: 'cutoff', icon: '⏱',
+          text: 'Near export cutoff — this vehicle may still have been parked when the data was captured. The exit record likely falls outside this export\'s time range.' };
+      }
+      return { cls: 'mismatch', icon: '⚠',
+        text: 'No matching exit found within this export. The exit may exist under a slightly different plate number due to camera recognition errors. Check the Possible Matches view.' };
+    } else {
+      // Exit record whose enter_time (original entry) is before the dataset starts
+      if (t && start && t < start) {
+        return { cls: 'before', icon: '📅',
+          text: 'This vehicle entered before the start of this export\'s time range. The entry record is not included in this dataset.' };
+      }
+      return { cls: 'mismatch', icon: '⚠',
+        text: 'No matching entry found within this export. The entry may exist under a slightly different plate number due to camera recognition errors. Check the Possible Matches view.' };
+    }
+  }
+
+  function renderJourneys() {
+    if (!filtered.length) { showEmpty(); return; }
+    rowRegistry = [];
+    const allJourneys = buildJourneys(filtered);
+
+    // Data time range (used to explain why records are unmatched)
+    const allTimes = filtered.map(r => r.enter_time).filter(Boolean).sort();
+    const dataStart = allTimes[0] || '';
+    const dataEnd   = allTimes[allTimes.length - 1] || '';
+
+    // Apply unmatched filter
+    const journeys = journeyFilter === 'entry-only'
+      ? allJourneys.filter(j => j.entry && !j.exit)
+      : journeyFilter === 'exit-only'
+        ? allJourneys.filter(j => !j.entry && j.exit)
+        : allJourneys;
+
+    // Filter banner
+    const filterBanner = journeyFilter !== 'all' ? `
+      <div class="journey-filter-bar">
+        Showing <strong>${journeyFilter === 'entry-only' ? 'Entries Without Exit' : 'Exits Without Entry'}</strong>
+        &mdash; ${journeys.length} record${journeys.length !== 1 ? 's' : ''}
+        <span class="jf-spacer"></span>
+        <button class="export-btn" onclick="exportUnmatched('${journeyFilter}')">&#8659; Export to Excel</button>
+        <button onclick="clearJourneyFilter()">&#x2715; Show All</button>
+      </div>` : '';
+
+    let regIdx = 0;
+
+    const cards = journeys.map(j => {
+      const unmatched = !j.entry || !j.exit;
+      const entryReg  = regIdx++;
+      const exitReg   = regIdx++;
+
+      if (j.entry) {
+        rowRegistry[entryReg] = { images: j.entry.images, plate: j.plate, folder: j.entry.folder||currentFolder };
+      }
+      if (j.exit) {
+        rowRegistry[exitReg]  = { images: j.exit.images,  plate: j.plate, folder: j.exit.folder||currentFolder };
+      }
+
+      // Duration: entry.enter_time → exit.depart_time
+      let duration = '';
+      if (j.entry && j.exit) {
+        const t1 = j.entry.enter_time;
+        const t2 = j.exit.depart_time || j.exit.enter_time;
+        duration = computeDuration(t1, t2) || j.entry.duration || j.exit.duration || '';
+      }
+
+      function sideHtml(rec, label, cls, regI) {
+        if (!rec) {
+          // The OPPOSITE side is missing — explain why
+          const reason = cls === 'entry'
+            ? { cls:'before', icon:'📅', text:'No entry record found in this export. The vehicle may have entered before this export\'s time range, or the entry plate was not recognised.' }
+            : { cls:'cutoff', icon:'⏱', text:'No exit record found in this export. The vehicle may still have been parked at export time, or the exit plate was not recognised.' };
+          return `
+            <div class="journey-side">
+              <div class="journey-side-title ${cls}">${cls==='entry'?'↓ Entry':'↑ Exit'}</div>
+              <div class="reason-tag ${reason.cls}">${reason.icon} ${reason.text}</div>
+            </div>`;
+        }
+
+        const photos = rec.images && rec.images.length
+          ? rec.images.map((img,i) =>
+              `<img src="${imgUrl(img,rec.folder)}" alt="${escHtml(img)}"
+                    loading="lazy" class="lb-trigger" data-row="${regI}" data-idx="${i}">`
+            ).join('')
+          : `<span class="journey-empty" title="The camera may not have captured an image, or it was excluded from the export.">No images captured</span>`;
+
+        // Show reason tag only for unmatched records
+        const isUnmatched = (cls === 'entry' && !j.exit) || (cls === 'exit' && !j.entry);
+        const reasonTag = isUnmatched
+          ? (() => { const r = unmatchedReason(rec, cls, dataStart, dataEnd); return `<div class="reason-tag ${r.cls}">${r.icon} ${r.text}</div>`; })()
+          : '';
+
+        return `
+          <div class="journey-side">
+            <div class="journey-side-title ${cls}">${cls==='entry'?'↓ Entry':'↑ Exit'}&nbsp;&nbsp;${resultBadge(rec)}</div>
+            <div class="journey-time">
+              <strong>${cls==='entry' ? 'Entered' : 'Exited'}</strong>&nbsp;${escHtml(cls==='entry' ? rec.enter_time : (rec.depart_time || rec.enter_time))||'—'}
+            </div>
+            <div class="journey-gate">${escHtml(rec.gate)||''}</div>
+            ${reasonTag}
+            <div class="journey-photos">${photos}</div>
+          </div>`;
+      }
+
+      return `
+        <div class="journey-card${unmatched?' unmatched':''}">
+          <div class="journey-header">
+            <span class="journey-plate">${escHtml(j.plate)}</span>
+            ${duration ? `<span class="journey-duration">&#128336; Parked <strong>${escHtml(duration)}</strong></span>` : ''}
+            ${unmatched ? `<span style="margin-left:auto;font-size:.72rem;color:var(--muted)">(unmatched)</span>` : ''}
+          </div>
+          <div class="journey-body">
+            ${sideHtml(j.entry, 'Entry', 'entry', entryReg)}
+            ${sideHtml(j.exit,  'Exit',  'exit',  exitReg)}
+          </div>
+        </div>`;
+    }).join('');
+
+    document.getElementById('main').innerHTML =
+      filterBanner + `<div class="journey-wrap">${cards || '<div class="state-msg"><div class="icon" style="font-size:2rem;opacity:.4">🔍</div><p>No unmatched records.</p></div>'}</div>`;
+
+    document.getElementById('countBadge').innerHTML =
+      `<strong>${journeys.length}</strong>&nbsp;/&nbsp;${allJourneys.length} journeys`;
+  }
+
+  function computeDuration(t1, t2) {
+    if (!t1 || !t2) return '';
+    try {
+      const d1 = new Date(t1.replace(/\//g,'-'));
+      const d2 = new Date(t2.replace(/\//g,'-'));
+      const diff = Math.round((d2 - d1) / 60000);
+      if (diff < 0 || diff > 1440) return '';
+      const h = Math.floor(diff / 60), m = diff % 60;
+      return h ? `${h}h ${m}min` : `${m}min`;
+    } catch { return ''; }
+  }
+
+  function showEmpty() {
+    document.getElementById('main').innerHTML =
+      `<div class="state-msg"><div class="icon">🔍</div><p>No records match.</p></div>`;
+  }
+
+  /* ── Possible Matches ────────────────────────────────────────────────── */
+
+  // Levenshtein edit distance
+  function levenshtein(a, b) {
+    a = a.toUpperCase(); b = b.toUpperCase();
+    const m = a.length, n = b.length;
+    const dp = Array.from({length: m+1}, (_, i) =>
+      Array.from({length: n+1}, (_, j) => i === 0 ? j : (j === 0 ? i : 0))
+    );
+    for (let i = 1; i <= m; i++)
+      for (let j = 1; j <= n; j++)
+        dp[i][j] = a[i-1] === b[j-1]
+          ? dp[i-1][j-1]
+          : 1 + Math.min(dp[i-1][j-1], dp[i-1][j], dp[i][j-1]);
+    return dp[m][n];
+  }
+
+  // Plate similarity 0–1 (1 = identical)
+  function plateSim(p1, p2) {
+    if (!p1 || !p2) return 0;
+    if (p1.toUpperCase() === p2.toUpperCase()) return 1;
+    const maxLen = Math.max(p1.length, p2.length);
+    return maxLen ? 1 - levenshtein(p1, p2) / maxLen : 0;
+  }
+
+  // Highlight differing characters between two plate strings
+  function diffPlate(base, other) {
+    const a = base.toUpperCase(), b = other.toUpperCase();
+    return base.split('').map((ch, i) =>
+      (a[i] || '') !== (b[i] || '')
+        ? `<span class="diff">${escHtml(ch)}</span>`
+        : escHtml(ch)
+    ).join('');
+  }
+
+  // Parse a time string to Date
+  function parseTime(t) {
+    if (!t) return null;
+    try { return new Date(t.replace(/\//g, '-')); } catch { return null; }
+  }
+
+  // Score a possible entry↔exit pair (0–100)
+  function scorePair(entry, exit) {
+    // Time validity: the exit event must occur AFTER the entry
+    // For exit records: depart_time is actual exit time; enter_time is original entry time.
+    const entryT   = parseTime(entry.enter_time);
+    const exitT    = parseTime(exit.depart_time || exit.enter_time);
+    if (!entryT || !exitT || exitT <= entryT) return 0;
+
+    let score = 0;
+
+    // Plate similarity — highest weight (0–60 pts)
+    const ps = plateSim(entry.plate, exit.plate);
+    if (ps < 0.4) return 0;           // must share at least 40% of chars
+    score += ps * 60;
+
+    // Time proximity bonus: closer in time = more likely (0–20 pts)
+    const diffMin = (exitT - entryT) / 60000;
+    if (diffMin > 0 && diffMin <= 1440) {
+      score += Math.max(0, 20 - diffMin / 60 * 2); // decays over hours
+    }
+
+    // Vehicle attributes (0–20 pts total) — skip meaningless "Unknown"/"Others" values
+    const skip = new Set(['Others', 'None', 'Unknown', 'Other', '']);
+    const attr = (a, b, pts) => (a && b && !skip.has(a) && !skip.has(b) && a === b) ? pts : 0;
+    score += attr(entry.vehicle_type, exit.vehicle_type, 7);
+    score += attr(entry.color,        exit.color,         7);
+    score += attr(entry.brand,        exit.brand,         3);
+    score += attr(entry.region,       exit.region,        3);
+
+    return Math.min(100, Math.round(score));
+  }
+
+  let pmThreshold = 40; // minimum confidence % to show
+
+  function renderPossibleMatches() {
+    if (!filtered.length) { showEmpty(); return; }
+    rowRegistry = [];
+
+    // Collect unmatched from journey builder
+    const journeys       = buildJourneys(filtered);
+    const unmatchedEntry = journeys.filter(j => j.entry && !j.exit).map(j => j.entry);
+    const unmatchedExit  = journeys.filter(j => !j.entry && j.exit).map(j => j.exit);
+
+    if (!unmatchedEntry.length && !unmatchedExit.length) {
+      document.getElementById('main').innerHTML =
+        `<div class="state-msg"><div class="icon">✅</div><p>No unmatched records — all journeys are fully paired.</p></div>`;
+      return;
+    }
+
+    // Build scored pairs
+    const pairs = [];
+    unmatchedEntry.forEach(entry => {
+      unmatchedExit.forEach(exit => {
+        const score = scorePair(entry, exit);
+        if (score >= pmThreshold) pairs.push({ entry, exit, score });
+      });
+    });
+
+    // Sort: highest score first, then by entry time
+    pairs.sort((a, b) => b.score - a.score || (a.entry.enter_time < b.entry.enter_time ? -1 : 1));
+
+    const confClass = s => s >= 75 ? 'conf-high' : s >= 50 ? 'conf-med' : 'conf-low';
+    const confLabel = s => s >= 75 ? 'Likely Match' : s >= 50 ? 'Possible' : 'Low Confidence';
+
+    function sideHtml(rec, cls, regI) {
+      if (!rec) return '';
+      rowRegistry[regI] = { images: rec.images||[], plate: rec.plate, folder: rec.folder||currentFolder };
+      const otherRec = cls === 'entry'
+        ? pairs.find(p => p.entry === rec)?.exit
+        : pairs.find(p => p.exit  === rec)?.entry;
+
+      const plateHtml = otherRec
+        ? `<span class="pm-plate">${diffPlate(rec.plate, otherRec.plate)}</span>`
+        : `<span class="pm-plate">${escHtml(rec.plate)}</span>`;
+
+      const timeVal = cls === 'entry'
+        ? rec.enter_time
+        : (rec.depart_time || rec.enter_time);
+
+      const irrelevant = new Set(['Others', 'None', 'Unknown', 'Other', '']);
+      const meaningful = v => v && !irrelevant.has(v);
+      const attrs = [
+        { label: rec.vehicle_type, match: meaningful(rec.vehicle_type) && otherRec && rec.vehicle_type === otherRec.vehicle_type },
+        { label: rec.color,        match: meaningful(rec.color)        && otherRec && rec.color        === otherRec.color        },
+        { label: rec.brand,        match: meaningful(rec.brand)        && otherRec && rec.brand        === otherRec.brand        },
+        { label: rec.region,       match: meaningful(rec.region)       && otherRec && rec.region       === otherRec.region       },
+      ].filter(a => meaningful(a.label));
+
+      const photos = rec.images && rec.images.length
+        ? rec.images.map((img, i) =>
+            `<img src="${imgUrl(img, rec.folder)}" alt="${escHtml(img)}"
+                  class="lb-trigger" data-row="${regI}" data-idx="${i}" loading="lazy">`
+          ).join('')
+        : `<span style="font-size:.72rem;color:var(--muted);font-style:italic">No images</span>`;
+
+      return `
+        <div class="pm-side">
+          <div class="pm-side-title ${cls}">${cls === 'entry' ? '↓ Entry (unmatched)' : '↑ Exit (unmatched)'}</div>
+          <div class="pm-plates">${plateHtml}</div>
+          <div class="pm-time">
+            <strong>${cls === 'entry' ? 'Entered' : 'Exited'}:</strong> ${escHtml(timeVal)||'—'}<br>
+            <strong>Gate:</strong> ${escHtml(rec.gate)||'—'}
+          </div>
+          <div class="pm-attrs">
+            ${attrs.map(a => `<span class="pm-attr${a.match?' match':''}">${escHtml(a.label)}</span>`).join('')}
+          </div>
+          <div class="pm-photos">${photos}</div>
+        </div>`;
+    }
+
+    let regIdx = 0;
+    const cards = pairs.length ? pairs.map(p => {
+      const er = regIdx++;
+      const xr = regIdx++;
+      const cc = confClass(p.score);
+      return `
+        <div class="pm-card ${cc}">
+          <div class="pm-card-header">
+            <span class="pm-conf-label">${confLabel(p.score)}</span>
+            <div class="pm-conf-bar-wrap">
+              <div class="pm-conf-bar" style="width:${p.score}%"></div>
+            </div>
+            <span class="pm-conf-pct">${p.score}%</span>
+          </div>
+          <div class="pm-body">
+            ${sideHtml(p.entry, 'entry', er)}
+            ${sideHtml(p.exit,  'exit',  xr)}
+          </div>
+        </div>`;
+    }).join('') : `
+      <div class="state-msg">
+        <div class="icon" style="font-size:2rem;opacity:.4">🔍</div>
+        <p>No possible matches found above ${pmThreshold}% confidence.<br>
+           Try lowering the minimum confidence threshold.</p>
+      </div>`;
+
+    document.getElementById('main').innerHTML = `
+      <div class="pm-wrap">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:13px 16px;font-size:.79rem;line-height:1.7;color:var(--muted)">
+          <strong style="color:var(--text)">How possible matching works</strong><br>
+          This view attempts to pair unmatched <span style="color:var(--green)">entries</span> with unmatched
+          <span style="color:var(--red)">exits</span> that could not be automatically linked (e.g. due to plate recognition errors).
+          A score is calculated from: <strong style="color:var(--text)">plate similarity</strong> (character differences from OCR errors),
+          <strong style="color:var(--text)">time order</strong> (exit must be after entry), and
+          <strong style="color:var(--text)">vehicle attributes</strong> (colour, type, brand).
+          Plates with differing characters are <span style="color:var(--yellow);text-decoration:underline">highlighted in yellow</span>.
+          Use the confidence slider to control how strict the matching is.
+        </div>
+        <div class="pm-header-bar">
+          <strong>${unmatchedEntry.length}</strong> unmatched entries &nbsp;&#8596;&nbsp;
+          <strong>${unmatchedExit.length}</strong> unmatched exits &nbsp;&mdash;&nbsp;
+          <strong>${pairs.length}</strong> possible pair${pairs.length !== 1 ? 's' : ''} found
+          <span class="pm-thresh">
+            Min confidence:
+            <input type="range" min="20" max="90" step="5" value="${pmThreshold}"
+              oninput="pmThreshold=+this.value; document.getElementById('pmPct').textContent=this.value+'%'; renderPossibleMatches()">
+            <span id="pmPct">${pmThreshold}%</span>
+          </span>
+        </div>
+        ${cards}
+      </div>`;
+
+    document.getElementById('countBadge').innerHTML =
+      `<strong>${pairs.length}</strong>&nbsp;possible pair${pairs.length !== 1 ? 's' : ''}`;
+  }
+
+  /* ── Dashboard ────────────────────────────────────────────────────────── */
+  let _charts = {};
+
+  function destroyCharts() {
+    Object.values(_charts).forEach(c => { try { c.destroy(); } catch(_) {} });
+    _charts = {};
+  }
+
+  function renderDashboard() {
+    destroyCharts();
+    if (!filtered.length) { showEmpty(); return; }
+
+    // Optionally strip records with no images before computing any stats
+    const allDashRecs = filtered;
+    const recs = dashHideNoImages
+      ? allDashRecs.filter(r => r.images && r.images.length > 0)
+      : allDashRecs;
+    const noImgCount = allDashRecs.filter(r => !r.images || !r.images.length).length;
+    const total = recs.length;
+
+    // ── Basic counts ──
+    const entries    = recs.filter(r => r.enter_exit === 'Entering').length;
+    const exits      = total - entries;
+    const withImgs   = recs.filter(r => r.images && r.images.length).length;
+    const noImgs     = total - withImgs;
+    const passed     = recs.filter(r => r.result === 'Pass').length;
+    const failed     = total - passed;
+
+    // ── Journey matching ──
+    const journeys       = buildJourneys(recs);
+    const matched        = journeys.filter(j => j.entry && j.exit).length;
+    const entryOnly      = journeys.filter(j => j.entry && !j.exit).length;
+    const exitOnly       = journeys.filter(j => !j.entry && j.exit).length;
+    const matchPct       = total ? Math.round(matched / journeys.length * 100) : 0;
+
+    // ── Hourly distribution ──
+    const hourBuckets = {};
+    recs.forEach(r => {
+      const t = r.enter_time || '';
+      const h = t.length >= 13 ? t.substring(11, 13) : null;
+      if (!h) return;
+      if (!hourBuckets[h]) hourBuckets[h] = { entry: 0, exit: 0 };
+      r.enter_exit === 'Entering' ? hourBuckets[h].entry++ : hourBuckets[h].exit++;
+    });
+    const hours = Array.from({length:24}, (_,i) => String(i).padStart(2,'0'));
+    const hourEntry = hours.map(h => (hourBuckets[h]||{}).entry||0);
+    const hourExit  = hours.map(h => (hourBuckets[h]||{}).exit||0);
+
+    // ── Gate breakdown ──
+    const gateCounts = {};
+    recs.forEach(r => { if (r.gate) gateCounts[r.gate] = (gateCounts[r.gate]||0)+1; });
+    const gateEntries = Object.entries(gateCounts).sort((a,b)=>b[1]-a[1]).slice(0,8);
+
+    // ── Top plates (most frequent) ──
+    const plateCounts = {};
+    recs.forEach(r => { if (r.plate) plateCounts[r.plate] = (plateCounts[r.plate]||0)+1; });
+    const topPlates = Object.entries(plateCounts).sort((a,b)=>b[1]-a[1]).slice(0,10);
+
+    // ── Parking duration distribution (for matched journeys) ──
+    const durBuckets = {'0–15 min':0,'15–30 min':0,'30–60 min':0,'1–2 hrs':0,'2–4 hrs':0,'4+ hrs':0};
+    journeys.filter(j=>j.entry&&j.exit).forEach(j => {
+      try {
+        const t1 = new Date(j.entry.enter_time.replace(/\//g,'-'));
+        const t2 = new Date((j.exit.depart_time||j.exit.enter_time).replace(/\//g,'-'));
+        const m  = (t2-t1)/60000;
+        if (m < 0 || m > 1440) return;
+        if      (m < 15)  durBuckets['0–15 min']++;
+        else if (m < 30)  durBuckets['15–30 min']++;
+        else if (m < 60)  durBuckets['30–60 min']++;
+        else if (m < 120) durBuckets['1–2 hrs']++;
+        else if (m < 240) durBuckets['2–4 hrs']++;
+        else              durBuckets['4+ hrs']++;
+      } catch(_) {}
+    });
+    const durMax = Math.max(...Object.values(durBuckets), 1);
+
+    // ── Chart defaults ──
+    const C = Chart.defaults;
+    C.color = '#8892a4';
+    C.borderColor = '#2e3350';
+
+    const donutOpts = (labels, data, colors) => ({
+      type: 'doughnut',
+      data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 2, borderColor: '#1a1d27' }] },
+      options: { responsive: true, maintainAspectRatio: true, cutout:'70%',
+        plugins: { legend: { position:'bottom', labels:{ boxWidth:12, padding:10, font:{size:11} } } } }
+    });
+
+    const barOpts = (labels, datasets, horizontal=false) => ({
+      type: 'bar',
+      data: { labels, datasets },
+      options: {
+        indexAxis: horizontal ? 'y' : 'x',
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: datasets.length > 1, labels:{ boxWidth:10, font:{size:10} } } },
+        scales: {
+          x: { grid:{ color:'#2e3350' }, ticks:{ color:'#8892a4', font:{size:10} } },
+          y: { grid:{ color:'#2e3350' }, ticks:{ color:'#8892a4', font:{size:10} } }
+        }
+      }
+    });
+
+    // ── Build HTML ──
+    document.getElementById('main').innerHTML = `
+    <div class="dash-wrap">
+
+      <!-- No-image filter toggle -->
+      <div class="dash-filter-bar">
+        <label>
+          <input type="checkbox" ${dashHideNoImages ? 'checked' : ''}
+                 onchange="dashHideNoImages=this.checked;renderDashboard()">
+          Exclude records with no images
+        </label>
+        <span class="filter-note">
+          <em>${noImgCount}</em> record${noImgCount !== 1 ? 's' : ''} have no images
+          ${dashHideNoImages
+            ? '&nbsp;&mdash; currently <em>excluded</em> from all stats &amp; exports below'
+            : '&nbsp;&mdash; currently included (toggle to exclude)'}
+        </span>
+      </div>
+
+      <!-- KPI row -->
+      <div class="kpi-row">
+        <div class="kpi-card blue">
+          <div class="kpi-val">${total}</div>
+          <div class="kpi-label">Total Records
+            <span class="tip"><span class="tip-icon">i</span><span class="tip-box">Every row in the Excel export file. Each row is one vehicle event — either an entry or an exit.</span></span>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-val">${entries}</div>
+          <div class="kpi-label">Entries
+            <span class="tip"><span class="tip-icon">i</span><span class="tip-box">Vehicles recorded entering the parking lot in this export.</span></span>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-val">${exits}</div>
+          <div class="kpi-label">Exits
+            <span class="tip"><span class="tip-icon">i</span><span class="tip-box">Vehicles recorded leaving the parking lot in this export.</span></span>
+          </div>
+        </div>
+        <div class="kpi-card green">
+          <div class="kpi-val">${matchPct}%</div>
+          <div class="kpi-label">Journey Match Rate
+            <span class="tip"><span class="tip-icon">i</span><span class="tip-box">Percentage of vehicle journeys where both an entry AND an exit were found with the same plate number. A lower rate means more vehicles have missing counterparts — due to export time range limits or plate recognition errors.</span></span>
+          </div>
+          <div class="kpi-sub">${matched} of ${journeys.length} journeys matched</div>
+        </div>
+        <div class="kpi-card green">
+          <div class="kpi-val">${Math.round(passed/total*100)}%</div>
+          <div class="kpi-label">Pass Rate
+            <span class="tip"><span class="tip-icon">i</span><span class="tip-box">Percentage of vehicles that were granted access (Pass). Failed records may indicate vehicles that were denied entry/exit or triggered an alert.</span></span>
+          </div>
+          <div class="kpi-sub">${passed} passed, ${failed} failed</div>
+        </div>
+        <div class="kpi-card ${noImgs > 0 ? 'yellow' : 'green'}">
+          <div class="kpi-val">${noImgs}</div>
+          <div class="kpi-label">No Images
+            <span class="tip"><span class="tip-icon">i</span><span class="tip-box">Records where no camera images were captured or linked. This can happen if the camera missed the vehicle, the image was not exported, or the vehicle passed through very quickly.</span></span>
+          </div>
+          <div class="kpi-sub">${Math.round(withImgs/total*100)}% have images</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-val">${new Set(recs.map(r=>r.plate)).size}</div>
+          <div class="kpi-label">Unique Plates
+            <span class="tip"><span class="tip-icon">i</span><span class="tip-box">Number of distinct licence plate numbers seen across all records. One plate may appear multiple times if the vehicle entered and exited several times.</span></span>
+          </div>
+        </div>
+        <div class="kpi-card clickable ${entryOnly > 0 ? 'red' : 'green'}"
+             onclick="showUnmatchedJourneys('entry-only')" title="Click to view these records">
+          <div class="kpi-val">${entryOnly}</div>
+          <div class="kpi-label">Entry Without Exit
+            <span class="tip"><span class="tip-icon">i</span><span class="tip-box">Vehicles that entered but have no recorded exit in this export. Possible reasons: (1) the vehicle was still parked when data was captured, (2) the exit happened after the export window, or (3) the exit was recorded under a slightly different plate. Click to inspect these records.</span></span>
+          </div>
+          <div class="kpi-hint">↗ View records</div>
+        </div>
+        <div class="kpi-card clickable ${exitOnly > 0 ? 'red' : 'green'}"
+             onclick="showUnmatchedJourneys('exit-only')" title="Click to view these records">
+          <div class="kpi-val">${exitOnly}</div>
+          <div class="kpi-label">Exit Without Entry
+            <span class="tip"><span class="tip-icon">i</span><span class="tip-box">Vehicles that exited but have no recorded entry in this export. Possible reasons: (1) the vehicle entered before this export's time range started, (2) the entry was recorded under a slightly different plate. Click to inspect these records.</span></span>
+          </div>
+          <div class="kpi-hint">↗ View records</div>
+        </div>
+      </div>
+
+      <!-- Export bar for unmatched records -->
+      ${(entryOnly > 0 || exitOnly > 0) ? `
+      <div class="dash-export-bar">
+        <span class="export-label">&#8659; Export unmatched records to Excel${dashHideNoImages ? ' (no-image records excluded)' : ''}:</span>
+        ${entryOnly > 0 ? `<button class="dash-export-btn entry" onclick="exportUnmatched('entry-only')">&#8659; Entry Without Exit &nbsp;<strong>${entryOnly}</strong></button>` : ''}
+        ${exitOnly > 0  ? `<button class="dash-export-btn exit"  onclick="exportUnmatched('exit-only')">&#8659; Exit Without Entry &nbsp;<strong>${exitOnly}</strong></button>` : ''}
+        ${entryOnly > 0 && exitOnly > 0 ? `<button class="dash-export-btn both" onclick="exportUnmatched('both')">&#8659; All Unmatched &nbsp;<strong>${entryOnly + exitOnly}</strong></button>` : ''}
+      </div>` : ''}
+
+      <!-- Donuts row -->
+      <div class="dash-section-title">Breakdown</div>
+      <div class="chart-row">
+        <div class="chart-card">
+          <h4>Journey Match Status</h4>
+          <canvas id="cMatch" height="200"></canvas>
+        </div>
+        <div class="chart-card">
+          <h4>Image Coverage</h4>
+          <canvas id="cImage" height="200"></canvas>
+        </div>
+        <div class="chart-card">
+          <h4>Entry vs Exit</h4>
+          <canvas id="cType" height="200"></canvas>
+        </div>
+      </div>
+
+      <!-- Hourly -->
+      <div class="dash-section-title">Traffic by Hour</div>
+      <div class="chart-card wide">
+        <h4>Entries &amp; Exits per Hour of Day</h4>
+        <div style="height:200px"><canvas id="cHourly"></canvas></div>
+      </div>
+
+      <!-- Gate -->
+      <div class="dash-section-title">Gate Usage</div>
+      <div class="chart-card wide">
+        <h4>Records by Gate</h4>
+        <div style="height:${Math.max(100, gateEntries.length*34)}px"><canvas id="cGate"></canvas></div>
+      </div>
+
+      <!-- Duration + Top plates -->
+      <div class="dash-section-title">Parking Duration &amp; Frequent Plates</div>
+      <div class="chart-row">
+        <div class="chart-card">
+          <h4>Parking Duration Distribution</h4>
+          <div class="dur-bar-wrap" style="margin-top:4px">
+            ${Object.entries(durBuckets).map(([label,count]) => `
+              <div class="dur-bar-row">
+                <span class="dur-bar-label">${label}</span>
+                <div class="dur-bar-track">
+                  <div class="dur-bar-fill" style="width:${Math.round(count/durMax*100)}%"></div>
+                </div>
+                <span class="dur-bar-count">${count}</span>
+              </div>`).join('')}
+          </div>
+        </div>
+        <div class="chart-card">
+          <h4>Top 10 Most Frequent Plates</h4>
+          <table class="dash-table">
+            <thead><tr><th>#</th><th>Plate</th><th>Visits</th><th>Last Seen</th></tr></thead>
+            <tbody>
+              ${topPlates.map(([plate,count],i) => {
+                const last = recs.filter(r=>r.plate===plate).map(r=>r.enter_time).sort().pop()||'—';
+                return `<tr>
+                  <td style="color:var(--muted)">${i+1}</td>
+                  <td class="mono">${escHtml(plate)}</td>
+                  <td>${count}</td>
+                  <td style="color:var(--muted);font-size:.72rem">${escHtml(last)}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>`;
+
+    // ── Render charts ──
+    _charts.match  = new Chart(document.getElementById('cMatch'),
+      donutOpts(['Matched','Entry only','Exit only'],[matched,entryOnly,exitOnly],
+                ['#22c55e','#f59e0b','#ef4444']));
+
+    _charts.image  = new Chart(document.getElementById('cImage'),
+      donutOpts(['Has Images','No Images'],[withImgs,noImgs],['#4f8ef7','#2e3350']));
+
+    _charts.type   = new Chart(document.getElementById('cType'),
+      donutOpts(['Entry','Exit'],[entries,exits],['#4f8ef7','#7c5df0']));
+
+    _charts.hourly = new Chart(document.getElementById('cHourly'),
+      barOpts(hours.map(h=>h+':00'), [
+        { label:'Entry', data:hourEntry, backgroundColor:'rgba(79,142,247,.75)', borderRadius:3 },
+        { label:'Exit',  data:hourExit,  backgroundColor:'rgba(239,68,68,.65)',  borderRadius:3 }
+      ]));
+
+    if (gateEntries.length) {
+      _charts.gate = new Chart(document.getElementById('cGate'),
+        barOpts(gateEntries.map(e=>e[0]),
+          [{ label:'Records', data:gateEntries.map(e=>e[1]),
+             backgroundColor:'rgba(79,142,247,.7)', borderRadius:3 }], true));
+    }
+
+  }
+
+  function showUnmatchedJourneys(type) {
+    journeyFilter = type;
+    setView('journey');
+  }
+
+  /* ── Lightbox ─────────────────────────────────────────────────────────── */
+  function openLightbox(images, idx, plate, folder) {
+    lbImages = images.map(f => ({ src: imgUrl(f, folder), name: f }));
+    lbIdx = idx;
+    document.getElementById('lb-plate').textContent = plate || '';
+    lbZoomReset();
+    renderLb();
+    document.getElementById('lightbox').classList.add('open');
+  }
+
+  function closeLightbox() {
+    document.getElementById('lightbox').classList.remove('open');
+    document.getElementById('lbImg').src = '';
+  }
+
+  function renderLb() {
+    const item = lbImages[lbIdx];
+    document.getElementById('lbImg').src = item.src;
+    document.getElementById('lbImg').alt = item.name;
+    document.getElementById('lb-counter').textContent = `${lbIdx + 1} / ${lbImages.length}`;
+    applyTransform();
+  }
+
+  function lbNav(dir) {
+    lbIdx = (lbIdx + dir + lbImages.length) % lbImages.length;
+    lbZoomReset(); renderLb();
+  }
+
+  function applyTransform() {
+    const img = document.getElementById('lbImg');
+    img.style.transform = `translate(${panX}px,${panY}px) scale(${zoom})`;
+    document.getElementById('lb-zoom-level').textContent = Math.round(zoom * 100) + '%';
+    document.getElementById('lb-viewport').classList.toggle('zoomed', zoom > 1);
+  }
+
+  function lbZoom(dir) {
+    zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom * (dir > 0 ? ZOOM_STEP : 1/ZOOM_STEP)));
+    if (zoom === ZOOM_MIN) { panX = 0; panY = 0; }
+    applyTransform();
+  }
+
+  function lbZoomReset() { zoom = 1; panX = 0; panY = 0; applyTransform(); }
+
+  const vp = document.getElementById('lb-viewport');
+
+  vp.addEventListener('wheel', e => {
+    if (!document.getElementById('lightbox').classList.contains('open')) return;
+    e.preventDefault();
+    const rect = vp.getBoundingClientRect();
+    const cx = e.clientX - rect.left - rect.width/2;
+    const cy = e.clientY - rect.top  - rect.height/2;
+    const factor = e.deltaY < 0 ? ZOOM_STEP : 1/ZOOM_STEP;
+    const newZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom * factor));
+    const scale = newZoom / zoom;
+    panX = cx + (panX - cx) * scale;
+    panY = cy + (panY - cy) * scale;
+    zoom = newZoom;
+    if (zoom === ZOOM_MIN) { panX = 0; panY = 0; }
+    applyTransform();
+  }, { passive: false });
+
+  vp.addEventListener('click', e => {
+    if (dragMoved) return;
+    zoom <= 1 ? (zoom = 2.5, applyTransform()) : lbZoomReset();
+  });
+
+  vp.addEventListener('mousedown', e => {
+    if (zoom <= 1) return;
+    dragStart = { x: e.clientX - panX, y: e.clientY - panY };
+    dragMoved = false;
+    vp.classList.add('dragging'); e.preventDefault();
+  });
+  window.addEventListener('mousemove', e => {
+    if (!dragStart) return;
+    panX = e.clientX - dragStart.x; panY = e.clientY - dragStart.y;
+    dragMoved = true; applyTransform();
+  });
+  window.addEventListener('mouseup', () => { dragStart = null; vp.classList.remove('dragging'); });
+
+  document.getElementById('lightbox').addEventListener('click', e => {
+    if ((e.target === document.getElementById('lightbox') || e.target === vp) && !dragMoved)
+      closeLightbox();
+  });
+
+  document.addEventListener('keydown', e => {
+    if (!document.getElementById('lightbox').classList.contains('open')) return;
+    if (e.key === 'ArrowLeft')      lbNav(-1);
+    if (e.key === 'ArrowRight')     lbNav(1);
+    if (e.key === 'Escape')         closeLightbox();
+    if (e.key === '+' || e.key === '=') lbZoom(1);
+    if (e.key === '-')              lbZoom(-1);
+    if (e.key === '0')              lbZoomReset();
+  });
+
+  /* Event delegation for all thumbnail clicks */
+  document.getElementById('main').addEventListener('click', e => {
+    const img = e.target.closest('img.lb-trigger');
+    if (!img) return;
+    const entry = rowRegistry[+img.dataset.row];
+    if (entry) openLightbox(entry.images, +img.dataset.idx, entry.plate, entry.folder);
+  });
+
+  init();
+</script>
+</body>
+</html>
